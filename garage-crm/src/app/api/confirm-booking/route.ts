@@ -1,7 +1,7 @@
 // src/app/api/confirm-booking/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseServer } from '@/lib/supabaseServer';
-import sg from '@/lib/sendgrid';
+import { supabaseServer } from '../../..lib/supabaseServer';
+import sg from '../../../lib/sendgrid';
 
 export async function POST(req: NextRequest) {
   try {
