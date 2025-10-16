@@ -1,4 +1,6 @@
 // src/app/api/confirm-booking/route.ts
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
 import { sendEmail } from "@/lib/sendgrid";

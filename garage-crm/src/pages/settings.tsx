@@ -1,20 +1,29 @@
 import { useState, useEffect } from "react";
-import { supabase } from "../../lib/supabaseClient";
+import { supabase } from "@/lib/supabaseClient";
 
 export default function SettingsPage() {
-  const [daysNotice, setDaysNotice] = useState(7);
-  const [outreachEnabled, setOutreachEnabled] = useState(true);
-  const [outreachSendHour, setOutreachSendHour] = useState(9);
-  const [loading, setLoading] = useState(false);
+  const [daysNotice, setDaysNotice] = useState<number>(7);
+  const [outreachEnabled, setOutreachEnabled] = useState<boolean>(true);
+  const [outreachTime, setOutreachTime] = useState<string>("08:00");
+  const [loading, setLoading] = useState<boolean>(false);
   const [clientId, setClientId] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchClientSettings = async () => {
       setLoading(true);
-      const user = (await supabase.auth.getUser()).data.user;
+
+      const { data: userData } = await supabase.auth.getUser();
+      const user = userData?.user;
+
+      if (!user) {
+        console.warn("⚠️ No user found — skipping settings fetch");
+        setLoading(false);
+        return;
+      }
+
       const { data, error } = await supabase
         .from("clients")
-        .select("id, days_notice, outreach_enabled, outreach_send_hour")
+        .select("id, days_notice, outreach_enabled, outreach_time")
         .eq("user_id", user.id)
         .single();
 
@@ -22,8 +31,11 @@ export default function SettingsPage() {
         setClientId(data.id);
         setDaysNotice(data.days_notice || 7);
         setOutreachEnabled(data.outreach_enabled ?? true);
-        setOutreachSendHour(data.outreach_send_hour || 9);
+        setOutreachTime(data.outreach_time || "08:00");
+      } else if (error) {
+        console.error("Error fetching settings:", error.message);
       }
+
       setLoading(false);
     };
 
@@ -31,13 +43,19 @@ export default function SettingsPage() {
   }, []);
 
   const handleSave = async () => {
+    if (!clientId) {
+      alert("⚠️ Client ID missing — cannot save settings");
+      return;
+    }
+
     setLoading(true);
+
     const { error } = await supabase
       .from("clients")
       .update({
         days_notice: daysNotice,
         outreach_enabled: outreachEnabled,
-        outreach_send_hour: outreachSendHour,
+        outreach_time: outreachTime,
       })
       .eq("id", clientId);
 
@@ -46,6 +64,7 @@ export default function SettingsPage() {
     } else {
       alert("✅ Settings saved successfully!");
     }
+
     setLoading(false);
   };
 
@@ -63,18 +82,13 @@ export default function SettingsPage() {
         onChange={(e) => setDaysNotice(Number(e.target.value))}
       />
 
-      <label className="block mb-2 font-medium">Preferred Send Hour</label>
-      <select
+      <label className="block mb-2 font-medium">Preferred Send Time</label>
+      <input
+        type="time"
         className="border rounded p-2 w-full mb-4"
-        value={outreachSendHour}
-        onChange={(e) => setOutreachSendHour(Number(e.target.value))}
-      >
-        {[...Array(24).keys()].map((hour) => (
-          <option key={hour} value={hour}>
-            {hour}:00
-          </option>
-        ))}
-      </select>
+        value={outreachTime}
+        onChange={(e) => setOutreachTime(e.target.value)}
+      />
 
       <div className="flex items-center mb-4">
         <input
