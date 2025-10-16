@@ -1,63 +1,82 @@
 // src/app/api/confirm-booking/route.ts
-import { NextRequest, NextResponse } from 'next/server';
-import { supabaseServer } from '../../..lib/supabaseServer';
-import sg from '../../../lib/sendgrid';
+import { NextRequest, NextResponse } from "next/server";
+import { supabaseServer } from "@/lib/supabaseServer";
+import { sendEmail } from "@/lib/sendgrid";
 
-export async function POST(req: NextRequest) {
+/**
+ * Handles booking confirmation links from emails
+ * Example link:
+ *   https://garage-crm.vercel.app/api/confirm-booking?customerId=123&slot=2025-10-20T09:00:00Z
+ */
+
+export async function GET(req: NextRequest) {
   try {
-    const { token, customerId, slot } = await req.json();
-    if (!token || !customerId || !slot) throw new Error('Missing token/customerId/slot');
+    // Extract query parameters
+    const { searchParams } = new URL(req.url);
+    const customerId = searchParams.get("customerId");
+    const slot = searchParams.get("slot");
 
-    // 1) Pull followup row to validate token & get client
-    const { data: fq, error: fqErr } = await supabaseServer
-      .from('followup_queue')
-      .select('id, client_id, customer_id, status, payload, sent_at')
-      .eq('customer_id', customerId)
-      .eq('status', 'sent')
-      .order('created_at', { ascending: false })
-      .limit(5);
-    if (fqErr) throw fqErr;
+    if (!customerId || !slot) {
+      return NextResponse.json(
+        { error: "Missing required parameters." },
+        { status: 400 }
+      );
+    }
 
-    const row = (fq||[]).find(r => r.payload?.token === token);
-    if (!row) throw new Error('Invalid or already used token');
+    // ✅ Fetch customer details
+    const { data: customer, error: customerError } = await supabaseServer
+      .from("customers")
+      .select("*")
+      .eq("id", customerId)
+      .single();
 
-    // 2) Look up client + customer
-    const [{ data: client, error: cErr }, { data: cust, error: cuErr }] = await Promise.all([
-      supabaseServer.from('clients').select('id, from_email, from_name, timezone, name').eq('id', row.client_id).single(),
-      supabaseServer.from('customers').select('name, email, car_make, car_model, reg').eq('id', customerId).single()
-    ]);
-    if (cErr) throw cErr;
-    if (cuErr) throw cuErr;
+    if (customerError || !customer) {
+      console.error("❌ Customer not found:", customerError);
+      return NextResponse.json({ error: "Customer not found." }, { status: 404 });
+    }
 
-    // 3) Create confirmed booking (bookings table)
-    const appointment = new Date(slot).toISOString();
-    const { error: bErr } = await supabaseServer.from('bookings').insert({
-      client_name: cust?.name || '',
-      phone: null,
-      email: cust?.email || '',
-      service: 'service',
-      status: 'confirmed',
-      appointment_date: appointment,
-      client_id: client.id
+    // ✅ Update booking status
+    const { error: updateError } = await supabaseServer
+      .from("bookings")
+      .update({ status: "confirmed", confirmed_at: new Date().toISOString() })
+      .eq("customer_id", customerId)
+      .eq("service_date", slot);
+
+    if (updateError) {
+      console.error("❌ Failed to update booking:", updateError);
+      return NextResponse.json(
+        { error: "Failed to confirm booking." },
+        { status: 500 }
+      );
+    }
+
+    // ✅ Send confirmation email via SendGrid
+    await sendEmail({
+      to: customer.email,
+      subject: "✅ Booking Confirmed",
+      html: `
+        <p>Hi ${customer.name || "Customer"},</p>
+        <p>Your booking for <strong>${new Date(slot).toLocaleString("en-IE", {
+          dateStyle: "medium",
+          timeStyle: "short",
+        })}</strong> has been confirmed.</p>
+        <p>Thank you for choosing our service!</p>
+        <br/>
+        <p>Best regards,<br/>Your Garage Team</p>
+      `,
     });
-    if (bErr) throw bErr;
 
-    // 4) Mark followup as completed
-    await supabaseServer.from('followup_queue')
-      .update({ status: 'completed', sent_at: new Date().toISOString() })
-      .eq('id', row.id);
+    console.log(`✅ Booking confirmed for ${customer.email}`);
 
-    // 5) Send a confirmation email to the customer (optional)
-    await sg.send({
-      from: { email: client.from_email || 'no-reply@example.com', name: client.from_name || 'Your Garage Team' },
-      to: cust.email,
-      subject: 'Your booking is confirmed',
-      html: `<p>Thanks ${cust.name}, your booking for ${new Date(slot).toLocaleString('en-IE', { timeZone: client.timezone || 'Europe/Dublin' })} is confirmed.</p>`
+    return NextResponse.json({
+      message: "Booking confirmed successfully!",
+      customer: customer.email,
     });
-
-    return NextResponse.json({ ok: true });
-  } catch (e:any) {
-    console.error(e);
-    return NextResponse.json({ ok:false, error: e.message }, { status: 500 });
+  } catch (error: any) {
+    console.error("❌ Confirm booking error:", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
   }
 }
